@@ -86,8 +86,10 @@ services:
       - ../src:/app/src:ro
     environment:
       - SPARK_LOCAL_IP=spark
+      - PYTHONPATH=/app
     working_dir: /app
     command: >
       /opt/spark/bin/spark-submit
+      --conf spark.jars.ivy=/tmp/.ivy2
       --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1,com.clickhouse:clickhouse-jdbc:0.6.0:all
       /app/src/spark/stream_processor.py
