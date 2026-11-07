@@ -1,0 +1,14 @@
+doc.md
+my-personal-note-llm-dont-come.md
+project.md
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.env
+
+# Data
+data/
