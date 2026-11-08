@@ -147,7 +147,7 @@ def fetch_states(config, token_manager=None):
     return None
 
 
-def get_kafka_producer(bootstrap_servers: str) -> KafkaProducer:
+def get_kafka_producer(bootstrap_servers):
     # Retries built into kafka client
     return KafkaProducer(
         bootstrap_servers=bootstrap_servers,
@@ -158,12 +158,7 @@ def get_kafka_producer(bootstrap_servers: str) -> KafkaProducer:
     )
 
 
-def publish_states(
-    producer: KafkaProducer,
-    topic: str,
-    raw_payload: dict,
-    config: dict,
-) -> int:
+def publish_states(producer, topic, raw_payload, config):
     states = raw_payload.get("states") or []
     count = 0
 
@@ -189,13 +184,8 @@ def publish_states(
     return count
 
 
-def replay_samples(
-    filepath: str,
-    config: dict,
-    producer: KafkaProducer,
-    speed: float = 1.0,
-):
-    logger.info(f"Starting replay from {filepath} at {speed}x speed")
+def replay_samples(filepath, config, producer, delay=2.0):
+    logger.info(f"Starting replay from {filepath} with {delay}s delay")
     try:
         with open(filepath, "r", encoding="utf-8") as f:
             for line in f:
@@ -204,16 +194,13 @@ def replay_samples(
                 data = json.loads(line)
                 published = publish_states(producer, config["kafka_topic"], data, config)
                 logger.info(f"Replayed snapshot: published {published} aircraft states to {config['kafka_topic']}")
-                
-                # Sleep based on poll interval adjusted by speed factor
-                sleep_interval = max(0.5, config["poll_interval"] / speed)
-                time.sleep(sleep_interval)
+                time.sleep(delay)
     except FileNotFoundError:
         logger.error(f"Sample file not found: {filepath}")
         sys.exit(1)
 
 
-def record_sample(filepath: str, raw_payload: dict):
+def record_sample(filepath, raw_payload):
     with open(filepath, "a", encoding="utf-8") as f:
         f.write(json.dumps(raw_payload) + "\n")
     logger.info(f"Recorded snapshot to {filepath}")
@@ -223,7 +210,7 @@ def main():
     parser = argparse.ArgumentParser(description="OpenSky to Redpanda Flight Telemetry Producer")
     parser.add_argument("--record", type=str, help="Save API responses to the specified jsonl file")
     parser.add_argument("--replay", type=str, help="Replay flight data from the specified jsonl file")
-    parser.add_argument("--speed", type=float, default=1.0, help="Replay speed multiplier (e.g. 2.0)")
+    parser.add_argument("--delay", type=float, default=2.0, help="Seconds between snapshots (default 2)")
     parser.add_argument("--once", action="store_true", help="Fetch/publish one batch and exit")
     args = parser.parse_args()
 
@@ -237,7 +224,7 @@ def main():
     producer = get_kafka_producer(config["kafka_bootstrap_servers"])
 
     if args.replay:
-        replay_samples(args.replay, config, producer, speed=args.speed)
+        replay_samples(args.replay, config, producer, delay=args.delay)
         return
 
     token_manager = (
