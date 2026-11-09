@@ -77,8 +77,25 @@ agg = clean.groupBy(
 
 
 def write_states(batch_df, batch_id):
-    # cast on_ground bool -> int for clickhouse UInt8
-    rows = batch_df.withColumn("on_ground", F.col("on_ground").cast("int"))
+    # cast on_ground bool -> int for clickhouse UInt8 and ensure exact column order
+    rows = batch_df \
+        .withColumn("on_ground", F.col("on_ground").cast("int")) \
+        .select(
+            "icao24",
+            "callsign",
+            "origin_country",
+            "time_position",
+            "last_contact",
+            "longitude",
+            "latitude",
+            "baro_altitude",
+            "on_ground",
+            "velocity",
+            "true_track",
+            "vertical_rate",
+            "geo_altitude",
+            "event_time",
+        )
     n = rows.count()
     rows.write \
         .format("jdbc") \
@@ -94,8 +111,22 @@ def write_agg(batch_df, batch_id):
     rows = batch_df \
         .withColumn("window_start", F.col("window.start")) \
         .withColumn("window_end", F.col("window.end")) \
+        .withColumn("active_aircraft", F.col("active_aircraft").cast("int")) \
+        .withColumn("avg_velocity", F.col("avg_velocity").cast("float")) \
+        .withColumn("avg_baro_altitude", F.col("avg_baro_altitude").cast("float")) \
+        .withColumn("min_velocity", F.col("min_velocity").cast("float")) \
+        .withColumn("max_velocity", F.col("max_velocity").cast("float")) \
         .withColumn("updated_at", F.current_timestamp()) \
-        .drop("window")
+        .select(
+            "window_start",
+            "window_end",
+            "active_aircraft",
+            "avg_velocity",
+            "avg_baro_altitude",
+            "min_velocity",
+            "max_velocity",
+            "updated_at",
+        )
     rows.write \
         .format("jdbc") \
         .option("url", JDBC_URL) \

@@ -1,6 +1,7 @@
 from pyspark.sql.types import (
     BooleanType,
     DoubleType,
+    FloatType,
     LongType,
     StringType,
     StructField,
@@ -15,10 +16,10 @@ STATE_SCHEMA = StructType([
     StructField("last_contact", LongType()),
     StructField("longitude", DoubleType()),
     StructField("latitude", DoubleType()),
-    StructField("baro_altitude", DoubleType()),
+    StructField("baro_altitude", FloatType()),
     StructField("on_ground", BooleanType()),
-    StructField("velocity", DoubleType()),
-    StructField("true_track", DoubleType()),
-    StructField("vertical_rate", DoubleType()),
-    StructField("geo_altitude", DoubleType()),
+    StructField("velocity", FloatType()),
+    StructField("true_track", FloatType()),
+    StructField("vertical_rate", FloatType()),
+    StructField("geo_altitude", FloatType()),
 ])
