@@ -4,56 +4,33 @@ import logging
 import random
 import sys
 import time
-from datetime import datetime, timezone
 import requests
 from kafka import KafkaProducer
 
 from src.producer.config import OPENSKY_API_URL, OPENSKY_TOKEN_URL, load_config
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
 
 def transform_state_vector(vector):
-    # OpenSky state vector format:
-    # 0: icao24, 1: callsign, 2: origin_country, 3: time_position, 4: last_contact,
-    # 5: longitude, 6: latitude, 7: baro_altitude, 8: on_ground, 9: velocity,
-    # 10: true_track, 11: vertical_rate, 12: sensors, 13: geo_altitude, 14: squawk, 15: spi, 16: position_source
     if not vector or len(vector) < 7:
         return None
 
-    icao24 = vector[0]
-    callsign = vector[1].strip() if vector[1] else None
-    origin_country = vector[2]
-    time_position = vector[3]
-    last_contact = vector[4]
-    longitude = vector[5]
-    latitude = vector[6]
-    baro_altitude = vector[7] if len(vector) > 7 else None
-    on_ground = bool(vector[8]) if len(vector) > 8 else False
-    velocity = vector[9] if len(vector) > 9 else None
-    true_track = vector[10] if len(vector) > 10 else None
-    vertical_rate = vector[11] if len(vector) > 11 else None
-    geo_altitude = vector[13] if len(vector) > 13 else None
-
     return {
-        "icao24": icao24,
-        "callsign": callsign,
-        "origin_country": origin_country,
-        "time_position": time_position,
-        "last_contact": last_contact,
-        "longitude": longitude,
-        "latitude": latitude,
-        "baro_altitude": baro_altitude,
-        "on_ground": on_ground,
-        "velocity": velocity,
-        "true_track": true_track,
-        "vertical_rate": vertical_rate,
-        "geo_altitude": geo_altitude,
+        "icao24": vector[0],
+        "callsign": vector[1].strip() if vector[1] else None,
+        "origin_country": vector[2],
+        "time_position": vector[3],
+        "last_contact": vector[4],
+        "longitude": vector[5],
+        "latitude": vector[6],
+        "baro_altitude": vector[7] if len(vector) > 7 else None,
+        "on_ground": bool(vector[8]) if len(vector) > 8 else False,
+        "velocity": vector[9] if len(vector) > 9 else None,
+        "true_track": vector[10] if len(vector) > 10 else None,
+        "vertical_rate": vector[11] if len(vector) > 11 else None,
+        "geo_altitude": vector[13] if len(vector) > 13 else None,
     }
 
 
@@ -63,92 +40,55 @@ def is_within_bbox(lat, lon, lamin, lamax, lomin, lomax):
     return lamin <= lat <= lamax and lomin <= lon <= lomax
 
 
-class TokenManager:
-    def __init__(self, client_id, client_secret):
-        self.client_id = client_id
-        self.client_secret = client_secret
-        self.token = None
-        self.expires_at = 0.0
-
-    def get_token(self):
-        # Refresh 60 seconds before expiration
-        if self.token and time.time() < (self.expires_at - 60):
-            return self.token
-
-        try:
-            payload = {
-                "grant_type": "client_credentials",
-                "client_id": self.client_id,
-                "client_secret": self.client_secret,
-            }
-            res = requests.post(OPENSKY_TOKEN_URL, data=payload, timeout=10)
-            res.raise_for_status()
-            data = res.json()
-            self.token = data.get("access_token")
-            expires_in = data.get("expires_in", 1800)
-            self.expires_at = time.time() + expires_in
-            logger.info("Acquired fresh OpenSky OAuth token")
-            return self.token
-        except Exception as e:
-            logger.error(f"Failed to fetch OAuth token: {e}")
-            return None
+def get_token(client_id, client_secret):
+    payload = {
+        "grant_type": "client_credentials",
+        "client_id": client_id,
+        "client_secret": client_secret,
+    }
+    resp = requests.post(OPENSKY_TOKEN_URL, data=payload, timeout=10)
+    resp.raise_for_status()
+    return resp.json().get("access_token")
 
 
-def fetch_states(config, token_manager=None):
+def fetch_states(config, token=None):
     params = {
         "lamin": config["lamin"],
         "lamax": config["lamax"],
         "lomin": config["lomin"],
         "lomax": config["lomax"],
     }
-
     headers = {}
-    if token_manager:
-        token = token_manager.get_token()
-        if token:
-            headers["Authorization"] = f"Bearer {token}"
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
 
-    max_retries = 4
-    base_backoff = 2.0
-
-    for attempt in range(max_retries):
+    for attempt in range(4):
         try:
-            res = requests.get(OPENSKY_API_URL, params=params, headers=headers, timeout=15)
+            resp = requests.get(OPENSKY_API_URL, params=params, headers=headers, timeout=15)
+            rem = resp.headers.get("X-Rate-Limit-Remaining")
+            if rem:
+                logger.info(f"remaining credits: {rem}")
 
-            remaining = res.headers.get("X-Rate-Limit-Remaining")
-            if remaining is not None:
-                logger.info(f"OpenSky rate limit remaining credits: {remaining}")
+            if resp.status_code == 200:
+                return resp.json()
 
-            if res.status_code == 200:
-                return res.json()
-
-            if res.status_code == 429:
-                retry_after = res.headers.get("X-Rate-Limit-Retry-After-Seconds")
-                sleep_sec = float(retry_after) if retry_after else 60.0
-                logger.warning(f"Rate limited (HTTP 429). Sleeping for {sleep_sec}s")
-                time.sleep(sleep_sec)
+            if resp.status_code == 429:
+                wait = float(resp.headers.get("X-Rate-Limit-Retry-After-Seconds", 60))
+                logger.warning(f"429, waiting {wait}s")
+                time.sleep(wait)
                 continue
 
-            if 500 <= res.status_code < 600:
-                logger.warning(f"Server error {res.status_code}. Retrying...")
-            else:
-                logger.error(f"Unexpected status code {res.status_code}: {res.text}")
-                return None
-
+            logger.warning(f"status {resp.status_code}, retrying")
         except requests.RequestException as e:
-            logger.warning(f"Network error on attempt {attempt + 1}: {e}")
+            logger.warning(f"network error: {e}")
 
-        # Exponential backoff with jitter on 5xx or network errors
-        sleep_time = (base_backoff ** attempt) + random.uniform(0.5, 1.5)
-        logger.info(f"Backing off for {sleep_time:.2f}s")
-        time.sleep(sleep_time)
+        # backoff with jitter on error
+        time.sleep((2 ** attempt) + random.uniform(0.5, 1.5))
 
-    logger.error("Exceeded maximum retries for OpenSky API call")
     return None
 
 
 def get_kafka_producer(bootstrap_servers):
-    # Retries built into kafka client
     return KafkaProducer(
         bootstrap_servers=bootstrap_servers,
         key_serializer=lambda k: k.encode("utf-8") if isinstance(k, str) else k,
@@ -162,18 +102,13 @@ def publish_states(producer, topic, raw_payload, config):
     states = raw_payload.get("states") or []
     count = 0
 
-    for state in states:
-        item = transform_state_vector(state)
+    for s in states:
+        item = transform_state_vector(s)
         if not item:
             continue
-
         if not is_within_bbox(
-            item["latitude"],
-            item["longitude"],
-            config["lamin"],
-            config["lamax"],
-            config["lomin"],
-            config["lomax"],
+            item["latitude"], item["longitude"],
+            config["lamin"], config["lamax"], config["lomin"], config["lomax"]
         ):
             continue
 
@@ -185,41 +120,37 @@ def publish_states(producer, topic, raw_payload, config):
 
 
 def replay_samples(filepath, config, producer, delay=2.0):
-    logger.info(f"Starting replay from {filepath} with {delay}s delay")
+    logger.info(f"replaying {filepath} with {delay}s delay")
     try:
         with open(filepath, "r", encoding="utf-8") as f:
             for line in f:
                 if not line.strip():
                     continue
                 data = json.loads(line)
-                published = publish_states(producer, config["kafka_topic"], data, config)
-                logger.info(f"Replayed snapshot: published {published} aircraft states to {config['kafka_topic']}")
+                n = publish_states(producer, config["kafka_topic"], data, config)
+                logger.info(f"replayed {n} states")
                 time.sleep(delay)
     except FileNotFoundError:
-        logger.error(f"Sample file not found: {filepath}")
+        logger.error(f"file not found: {filepath}")
         sys.exit(1)
 
 
 def record_sample(filepath, raw_payload):
     with open(filepath, "a", encoding="utf-8") as f:
         f.write(json.dumps(raw_payload) + "\n")
-    logger.info(f"Recorded snapshot to {filepath}")
+    logger.info(f"saved snapshot to {filepath}")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="OpenSky to Redpanda Flight Telemetry Producer")
-    parser.add_argument("--record", type=str, help="Save API responses to the specified jsonl file")
-    parser.add_argument("--replay", type=str, help="Replay flight data from the specified jsonl file")
-    parser.add_argument("--delay", type=float, default=2.0, help="Seconds between snapshots (default 2)")
-    parser.add_argument("--once", action="store_true", help="Fetch/publish one batch and exit")
+    parser = argparse.ArgumentParser(description="opensky producer")
+    parser.add_argument("--record", type=str, help="save jsonl to path")
+    parser.add_argument("--replay", type=str, help="replay jsonl from path")
+    parser.add_argument("--delay", type=float, default=2.0, help="replay delay seconds")
+    parser.add_argument("--once", action="store_true", help="run once and exit")
     args = parser.parse_args()
 
     config = load_config()
-    logger.info(
-        f"Producer started with bbox lat ({config['lamin']}..{config['lamax']}), "
-        f"lon ({config['lomin']}..{config['lomax']}), cost={config['cost_per_call']} credits, "
-        f"interval={config['poll_interval']:.1f}s, OAuth={config['has_oauth']}"
-    )
+    logger.info(f"started producer bbox ({config['lamin']}..{config['lamax']}), interval {config['poll_interval']:.1f}s")
 
     producer = get_kafka_producer(config["kafka_bootstrap_servers"])
 
@@ -227,22 +158,23 @@ def main():
         replay_samples(args.replay, config, producer, delay=args.delay)
         return
 
-    token_manager = (
-        TokenManager(config["client_id"], config["client_secret"])
-        if config["has_oauth"]
-        else None
-    )
+    token = None
+    if config["has_oauth"]:
+        try:
+            token = get_token(config["client_id"], config["client_secret"])
+        except Exception as e:
+            logger.warning(f"failed to get oauth token: {e}")
 
     while True:
-        data = fetch_states(config, token_manager)
+        data = fetch_states(config, token)
         if data:
             if args.record:
                 record_sample(args.record, data)
 
-            published = publish_states(producer, config["kafka_topic"], data, config)
-            logger.info(f"Published {published} states to {config['kafka_topic']}")
+            n = publish_states(producer, config["kafka_topic"], data, config)
+            logger.info(f"published {n} states")
         else:
-            logger.warning("No data retrieved in this poll cycle")
+            logger.warning("no states received")
 
         if args.once:
             break
