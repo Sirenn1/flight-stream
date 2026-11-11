@@ -7,7 +7,10 @@ import time
 import requests
 from kafka import KafkaProducer
 
-from src.producer.config import OPENSKY_API_URL, OPENSKY_TOKEN_URL, load_config
+try:
+    from src.producer.config import OPENSKY_API_URL, OPENSKY_TOKEN_URL, load_config
+except ModuleNotFoundError:
+    from config import OPENSKY_API_URL, OPENSKY_TOKEN_URL, load_config
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
